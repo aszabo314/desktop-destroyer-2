@@ -109,7 +109,7 @@ const WEAPONS = {
   },
   missile: {
     name: 'MISSILE',
-    fireRate: 1500,             // slow fire rate
+    fireRate: 1000,             // moderate fire rate
     auto: false,
     bulletsPerShot: 1,
     spread: 0,
@@ -148,7 +148,7 @@ const WEAPONS = {
   },
   cluster: {
     name: 'CLUSTER',
-    fireRate: 2000,
+    fireRate: 1400,
     auto: false,
     bulletsPerShot: 1,
     spread: 0,
@@ -497,6 +497,20 @@ function drawCrosshair() {
       crosshairGfx.circle(Math.cos(a) * 30, Math.sin(a) * 30, 2);
       crosshairGfx.fill({ color: 0xFF8800, alpha: 0.5 });
     }
+  } else if (currentWeapon === 'cluster') {
+    // Cluster: concentric danger zone rings
+    crosshairGfx.circle(0, 0, 4);
+    crosshairGfx.fill({ color: 0xFFAA00, alpha: 0.7 });
+    crosshairGfx.circle(0, 0, 18);
+    crosshairGfx.stroke({ width: 2, color: 0xFFAA00, alpha: 0.5 });
+    crosshairGfx.circle(0, 0, 35);
+    crosshairGfx.stroke({ width: 1, color: 0xFF6600, alpha: 0.3 });
+    // X marks the spot
+    for (const [x1, y1, x2, y2] of [[-8,-8,-3,-3],[3,3,8,8],[-8,8,-3,3],[3,-3,8,-8]]) {
+      crosshairGfx.moveTo(x1, y1);
+      crosshairGfx.lineTo(x2, y2);
+      crosshairGfx.stroke({ width: 2, color: 0xFFAA00, alpha: 0.6 });
+    }
   } else if (currentWeapon === 'laser') {
     // Laser: small bright dot with faint rings
     crosshairGfx.circle(0, 0, 2);
@@ -541,7 +555,7 @@ function drawCrosshair() {
 
 // ─── HUD ─────────────────────────────────────────────────────────────────────
 function getHudString() {
-  return `[1] REVOLVER  [2] CHAINGUN  [3] FLAMESHOT  [4] PAINTBALL  [5] MISSILE  [6] LASER  |  ${WEAPONS[currentWeapon].name}  |  [ESC] Quit`;
+  return `[1] REVOLVER  [2] CHAINGUN  [3] FLAMESHOT  [4] PAINTBALL  [5] MISSILE  [6] LASER  [7] CLUSTER  |  ${WEAPONS[currentWeapon].name}  |  [ESC] Quit`;
 }
 function updateHud() {
   if (hudText) hudText.text = getHudString();
@@ -589,6 +603,27 @@ function fireOneRound(x, y, weapon) {
   const isMissile = weapon === WEAPONS.missile;
   const isLaser = weapon === WEAPONS.laser;
   const shotColor = isPaintball ? randomBrightColor() : 0;
+
+  const isCluster = weapon === WEAPONS.cluster;
+
+  if (isCluster) {
+    // Launch a ballistic cluster bomb toward target
+    const dx = x - originX;
+    const dy = y - originY;
+    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+    // Calculate launch velocity for a ballistic arc
+    const flightTime = 0.7 + dist / 1200; // longer flight for farther targets
+    const launchVx = dx / flightTime;
+    const launchVy = dy / flightTime - 0.5 * GRAVITY * 0.4 * flightTime; // compensate for gravity
+    clusterBombs.push({
+      x: originX, y: originY,
+      vx: launchVx, vy: launchVy,
+      targetX: x, targetY: y,
+      age: 0, trailTimer: 0, flightTime,
+    });
+    showMuzzleFlash(originX, originY - 30, weapon, 0);
+    return;
+  }
 
   if (isLaser) {
     // Stamp glowing beam line from origin to target
@@ -1068,7 +1103,7 @@ function stampImpact(x, y, weapon, shotColor) {
   app.renderer.render({ container: stamp, target: decalTexture, clear: false });
   stamp.destroy();
 
-  if (isRev) stampCracks(x, y, weapon);
+  if (imp.crackCount) stampCracks(x, y, weapon);
 }
 
 // ─── Particle Spawning ───────────────────────────────────────────────────────
@@ -1269,6 +1304,7 @@ function gameLoop(ticker) {
   app.renderer.render({ container: glowCoolOverlay, target: glowTexture, clear: false });
 
   updateMissiles(dt);
+  updateCluster(dt);
   updateBulletTrails(dt);
   updateParticles(dt);
   syncParticlesToPixi();
@@ -1411,6 +1447,185 @@ function detonateMissile(x, y) {
       0xFF6600, 1, duration, 0,
       0.5 * Math.random(),
       0);
+  }
+}
+
+// ─── Cluster Bomb & Bomblet Update ───────────────────────────────────────────
+function updateCluster(dt) {
+  const weapon = WEAPONS.cluster;
+  const imp = weapon.impact;
+
+  // ── Update ballistic cluster projectiles ──
+  let i = clusterBombs.length;
+  while (i--) {
+    const b = clusterBombs[i];
+    b.age += dt;
+    b.vy += GRAVITY * 0.4 * dt; // gravity arc
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+
+    // Smoke trail
+    b.trailTimer -= dt;
+    if (b.trailTimer <= 0) {
+      b.trailTimer = 0.025;
+      addP('m', b.x + (Math.random() - 0.5) * 4, b.y,
+        -b.vx * 0.05 + (Math.random() - 0.5) * 20,
+        -b.vy * 0.05 + (Math.random() - 0.5) * 20,
+        3 + Math.random() * 4, 0x777777, 0.4,
+        0.3 + Math.random() * 0.3, -0.1, 0);
+      // Sparky trail
+      if (Math.random() < 0.4) {
+        addP('s', b.x, b.y,
+          (Math.random() - 0.5) * 40, (Math.random() - 0.5) * 40,
+          1 + Math.random(), 0xFFAA00, 0.8,
+          0.05 + Math.random() * 0.1, 0.3, 0);
+      }
+    }
+
+    // Draw the projectile
+    const angle = Math.atan2(b.vy, b.vx);
+    missileGfx.circle(b.x, b.y, 4);
+    missileGfx.fill({ color: 0xDDDDDD, alpha: 0.9 });
+    missileGfx.circle(b.x + Math.cos(angle) * 5, b.y + Math.sin(angle) * 5, 2);
+    missileGfx.fill({ color: 0xFFAA00, alpha: 0.7 });
+
+    // Detonate when reaching target area or after flight time
+    const dx = b.x - b.targetX;
+    const dy = b.y - b.targetY;
+    const distToTarget = Math.sqrt(dx * dx + dy * dy);
+    const pastTarget = b.age > b.flightTime;
+    // Only check proximity after at least half the flight time (so it doesn't detonate at origin)
+    const closeEnough = distToTarget < 30 && b.age > b.flightTime * 0.5;
+
+    if (closeEnough || pastTarget) {
+      // Initial split explosion — small flash
+      const shakeAngle = Math.random() * Math.PI * 2;
+      shakeX += Math.cos(shakeAngle) * 8;
+      shakeY += Math.sin(shakeAngle) * 8;
+      shakeDecay = Math.max(shakeDecay, 8);
+
+      // Flash at split point
+      for (let j = 0; j < 6; j++) {
+        const fa = Math.random() * Math.PI * 2;
+        const fspd = 80 + Math.random() * 120;
+        addP('f', b.x, b.y,
+          Math.cos(fa) * fspd, Math.sin(fa) * fspd,
+          4 + Math.random() * 4, 0xFFFFFF, 1, 0.06 + Math.random() * 0.06, 0, 0);
+      }
+      // Smoke puff
+      for (let j = 0; j < 6; j++) {
+        const a = Math.random() * Math.PI * 2;
+        addP('m', b.x, b.y,
+          Math.cos(a) * 60 + (Math.random() - 0.5) * 30,
+          Math.sin(a) * 60 - 30,
+          5 + Math.random() * 6, 0x666666, 0.5,
+          0.4 + Math.random() * 0.3, -0.2, 0);
+      }
+
+      // Spawn bomblets
+      for (let j = 0; j < imp.bombletCount; j++) {
+        const a = Math.random() * Math.PI * 2;
+        const spd = imp.bombletSpeed * (0.6 + Math.random() * 0.8);
+        bomblets.push({
+          x: b.x, y: b.y,
+          vx: Math.cos(a) * spd,
+          vy: Math.sin(a) * spd * 0.6 - 40 - Math.random() * 60, // slight upward bias
+          age: 0,
+          phase: 0, // 0 = burrowing, 1 = detonating
+          detonateTimer: 0,
+          detonateCount: 0,
+          travelTime: imp.bombletTravelTime * (0.7 + Math.random() * 0.6),
+        });
+      }
+
+      clusterBombs.splice(i, 1);
+      continue;
+    }
+  }
+
+  // ── Update bomblets ──
+  let j = bomblets.length;
+  while (j--) {
+    const bl = bomblets[j];
+    bl.age += dt;
+
+    if (bl.phase === 0) {
+      // Burrowing phase — scatter outward
+      bl.vy += GRAVITY * 0.3 * dt;
+      bl.x += bl.vx * dt;
+      bl.y += bl.vy * dt;
+
+      // Bounce off bottom
+      if (bl.y > screenH - 5) {
+        bl.y = screenH - 5;
+        bl.vy *= -0.3;
+      }
+
+      // Spark trail while burrowing
+      if (Math.random() < dt * 15) {
+        addP('s', bl.x, bl.y,
+          (Math.random() - 0.5) * 30, -20 - Math.random() * 40,
+          1 + Math.random(), 0xFFAA00, 0.7,
+          0.08 + Math.random() * 0.1, 0.3, 0);
+      }
+      // Smoke trail
+      if (Math.random() < dt * 10) {
+        addP('m', bl.x, bl.y,
+          (Math.random() - 0.5) * 10, -15 - Math.random() * 20,
+          2 + Math.random() * 3, 0x666666, 0.3,
+          0.2 + Math.random() * 0.2, -0.1, 0);
+      }
+
+      // Draw bomblet
+      missileGfx.circle(bl.x, bl.y, 2.5);
+      missileGfx.fill({ color: 0xFFCC00, alpha: 0.8 });
+      missileGfx.circle(bl.x, bl.y, 4);
+      missileGfx.fill({ color: 0xFF6600, alpha: 0.3 });
+
+      // Transition to detonation phase
+      if (bl.age >= bl.travelTime) {
+        bl.phase = 1;
+        bl.detonateTimer = 0;
+        bl.detonateCount = 0;
+      }
+    } else {
+      // Detonation phase — repeated small explosions
+      bl.detonateTimer -= dt;
+      // Slow down while detonating
+      bl.vx *= (1 - 3 * dt);
+      bl.vy *= (1 - 3 * dt);
+      bl.x += bl.vx * dt;
+      bl.y += bl.vy * dt;
+
+      // Flicker while waiting to detonate
+      missileGfx.circle(bl.x, bl.y, 2 + Math.random() * 2);
+      missileGfx.fill({ color: 0xFFFF00, alpha: 0.5 + Math.random() * 0.4 });
+
+      if (bl.detonateTimer <= 0) {
+        bl.detonateTimer = imp.bombletDetonateInterval * (0.6 + Math.random() * 0.8);
+        bl.detonateCount++;
+
+        // Small explosion at this location
+        const bx = bl.x + (Math.random() - 0.5) * 15;
+        const by = bl.y + (Math.random() - 0.5) * 15;
+
+        // Screen shake
+        const sa = Math.random() * Math.PI * 2;
+        shakeX += Math.cos(sa) * weapon.screenShake;
+        shakeY += Math.sin(sa) * weapon.screenShake;
+        shakeDecay = Math.max(shakeDecay, weapon.screenShake);
+
+        stampImpact(bx, by, weapon, 0);
+        stampGlow(bx, by, weapon);
+        spawnExplosion(bx, by, weapon, 0);
+      }
+
+      // Remove after all detonations
+      if (bl.detonateCount >= imp.bombletDetonations) {
+        bomblets.splice(j, 1);
+        continue;
+      }
+    }
   }
 }
 
