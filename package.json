@@ -1,0 +1,32 @@
+{
+  "name": "desktop-destroyer",
+  "version": "1.0.0",
+  "description": "Shoot your desktop with satisfying explosions",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win portable"
+  },
+  "build": {
+    "appId": "com.desktop-destroyer",
+    "productName": "Desktop Destroyer",
+    "win": {
+      "target": "portable"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*"
+    ]
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "electron": "^41.2.0",
+    "howler": "^2.2.4",
+    "pixi.js": "^8.18.1"
+  },
+  "devDependencies": {
+    "electron-builder": "^26.8.1"
+  }
+}
