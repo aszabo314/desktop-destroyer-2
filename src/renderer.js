@@ -146,6 +146,45 @@ const WEAPONS = {
       ringSpeed: 600,           // ring expansion speed
     }
   },
+  cluster: {
+    name: 'CLUSTER',
+    fireRate: 2000,
+    auto: false,
+    bulletsPerShot: 1,
+    spread: 0,
+    screenShake: 6,
+    muzzleFlashScale: 1.2,
+    glowRadius: 25,
+    glowIntensity: 0.8,
+    trailWidth: 0,
+    trailColor: 0,
+    trailDecay: 0,
+    impact: {
+      craterRadius: 15,
+      craterCount: 2,
+      scorchRadius: 30,
+      crackCount: 3,
+      crackLenMin: 20,
+      crackLenMax: 60,
+      crackWidth: 2,
+      debrisCount: 20,
+      sparkCount: 15,
+      smokeCount: 8,
+      shrapnelCount: 4,
+      debrisSpeedMin: 150,
+      debrisSpeedMax: 500,
+      sparkSpeedMin: 200,
+      sparkSpeedMax: 600,
+      colors: [0xFF6600, 0xFF4400, 0xFF8800, 0xFFAA00, 0xFFCC00, 0xCCCCCC],
+      sparkColors: [0xFFFF00, 0xFFDD00, 0xFFFFFF, 0xFFAA00],
+      // Cluster-specific
+      bombletCount: 10,
+      bombletSpeed: 120,
+      bombletTravelTime: 0.8,
+      bombletDetonations: 4,
+      bombletDetonateInterval: 0.2,
+    }
+  },
   laser: {
     name: 'LASER',
     fireRate: 16,               // ~60 Hz continuous beam
@@ -258,6 +297,8 @@ let bulletTrailGfx;
 let bulletTrails = [];
 let missiles = [];     // active guided missiles [{x, y, vx, vy, age, trailTimer}]
 let missileGfx;        // Graphics object for drawing missiles
+let clusterBombs = []; // ballistic cluster projectiles [{x, y, vx, vy, age, trailTimer}]
+let bomblets = [];     // scattered sub-munitions [{x, y, vx, vy, age, phase, detonateTimer, detonateCount}]
 let screenW, screenH;
 
 // Particle data (SoA for performance)
@@ -417,6 +458,7 @@ function setupInput() {
     if (e.key === '4') { currentWeapon = 'paintball'; updateHud(); drawCrosshair(); }
     if (e.key === '5') { currentWeapon = 'missile'; updateHud(); drawCrosshair(); }
     if (e.key === '6') { currentWeapon = 'laser'; updateHud(); drawCrosshair(); }
+    if (e.key === '7') { currentWeapon = 'cluster'; updateHud(); drawCrosshair(); }
     if (e.key === 'Escape') window.close();
   });
 }
