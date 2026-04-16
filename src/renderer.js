@@ -220,6 +220,73 @@ const WEAPONS = {
       beamGlowColor: 0x0066FF,
     }
   },
+  airstrike: {
+    name: 'AIRSTRIKE',
+    fireRate: 3000,
+    auto: false,
+    bulletsPerShot: 1,
+    spread: 0,
+    screenShake: 0,
+    muzzleFlashScale: 0,
+    glowRadius: 30,
+    glowIntensity: 0.9,
+    trailWidth: 0,
+    trailColor: 0,
+    trailDecay: 0,
+    impact: {
+      craterRadius: 14,
+      craterCount: 2,
+      scorchRadius: 30,
+      crackCount: 0,
+      crackLenMin: 0,
+      crackLenMax: 0,
+      crackWidth: 0,
+      debrisCount: 10,
+      sparkCount: 25,
+      smokeCount: 8,
+      shrapnelCount: 0,
+      debrisSpeedMin: 150,
+      debrisSpeedMax: 500,
+      sparkSpeedMin: 200,
+      sparkSpeedMax: 700,
+      colors: [0x0044FF, 0x0066FF, 0x0088FF, 0x00AAFF, 0x00CCFF, 0xFFFFFF],
+      sparkColors: [0x00CCFF, 0x00EEFF, 0xFFFFFF, 0x44AAFF, 0x0088FF],
+      // Airstrike-specific
+      planeDelay: 1.2,         // seconds before plane arrives
+      planeSpeed: 700,         // pixels per second
+      dropInterval: 0.08,      // seconds between bomb drops
+      dropSpread: 60,          // lateral spread of drops
+      dropZone: 250,           // how far along path bombs are dropped
+      restrikeCount: 3,        // extra detonations per impact
+      restrikeInterval: 0.15,  // seconds between re-detonations
+    }
+  },
+  nuke: {
+    name: 'NUKE',
+    fireRate: 5000,
+    auto: false,
+    bulletsPerShot: 1,
+    spread: 0,
+    screenShake: 40,
+    muzzleFlashScale: 0,
+    glowRadius: 0,
+    glowIntensity: 0,
+    trailWidth: 0,
+    trailColor: 0,
+    trailDecay: 0,
+    impact: {
+      craterRadius: 0, craterCount: 0, scorchRadius: 0, crackCount: 0,
+      debrisCount: 0, sparkCount: 0, smokeCount: 0, shrapnelCount: 0,
+      debrisSpeedMin: 0, debrisSpeedMax: 0, sparkSpeedMin: 0, sparkSpeedMax: 0,
+      colors: [], sparkColors: [],
+      // Nuke-specific timing
+      flashDuration: 0.5,       // initial white flash
+      explodeDuration: 3.5,     // main explosion + mushroom cloud
+      fadeToWhiteDuration: 2.0, // screen fades to white
+      holdWhiteDuration: 1.5,   // hold white
+      fadeFromWhiteDuration: 2.0,// fade back
+    }
+  },
   paintball: {
     name: 'PAINTBALL',
     fireRate: 120,              // medium-high rate
@@ -299,6 +366,9 @@ let missiles = [];     // active guided missiles [{x, y, vx, vy, age, trailTimer
 let missileGfx;        // Graphics object for drawing missiles
 let clusterBombs = []; // ballistic cluster projectiles [{x, y, vx, vy, age, trailTimer}]
 let bomblets = [];     // scattered sub-munitions [{x, y, vx, vy, age, phase, detonateTimer, detonateCount}]
+let airstrikes = [];   // active airstrikes [{targetX, targetY, age, plane, drops, smokeTimer}]
+let nukeState = null;  // {x, y, age, phase} or null when inactive
+let nukeOverlay;       // white overlay Graphics for nuke fade
 let screenW, screenH;
 
 // Particle data (SoA for performance)
@@ -433,6 +503,14 @@ async function init() {
   particleCountText.y = screenH - 25;
   app.stage.addChild(particleCountText);
 
+  // Nuke white overlay — on top of everything
+  nukeOverlay = new PIXI.Graphics();
+  nukeOverlay.rect(0, 0, screenW, screenH);
+  nukeOverlay.fill({ color: 0xFFFFFF });
+  nukeOverlay.alpha = 0;
+  nukeOverlay.visible = false;
+  app.stage.addChild(nukeOverlay);
+
   setupInput();
   app.ticker.add(gameLoop);
 }
@@ -452,13 +530,13 @@ function setupInput() {
   app.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
   document.addEventListener('keydown', (e) => {
-    if (e.key === '1') { currentWeapon = 'revolver'; updateHud(); drawCrosshair(); }
-    if (e.key === '2') { currentWeapon = 'chaingun'; updateHud(); drawCrosshair(); }
-    if (e.key === '3') { currentWeapon = 'flameshot'; updateHud(); drawCrosshair(); }
-    if (e.key === '4') { currentWeapon = 'paintball'; updateHud(); drawCrosshair(); }
-    if (e.key === '5') { currentWeapon = 'missile'; updateHud(); drawCrosshair(); }
-    if (e.key === '6') { currentWeapon = 'laser'; updateHud(); drawCrosshair(); }
-    if (e.key === '7') { currentWeapon = 'cluster'; updateHud(); drawCrosshair(); }
+    const weaponKeys = { '1': 'revolver', '2': 'chaingun', '3': 'flameshot', '4': 'paintball', '5': 'missile', '6': 'laser', '7': 'cluster', '8': 'airstrike', '9': 'nuke' };
+    if (weaponKeys[e.key] && weaponKeys[e.key] !== currentWeapon) {
+      currentWeapon = weaponKeys[e.key];
+      lastFireTime = 0;
+      updateHud();
+      drawCrosshair();
+    }
     if (e.key === 'Escape') window.close();
   });
 }
@@ -497,6 +575,39 @@ function drawCrosshair() {
       crosshairGfx.circle(Math.cos(a) * 30, Math.sin(a) * 30, 2);
       crosshairGfx.fill({ color: 0xFF8800, alpha: 0.5 });
     }
+  } else if (currentWeapon === 'nuke') {
+    // Nuke: radiation hazard symbol
+    crosshairGfx.circle(0, 0, 6);
+    crosshairGfx.fill({ color: 0xFFFF00, alpha: 0.7 });
+    crosshairGfx.circle(0, 0, 6);
+    crosshairGfx.stroke({ width: 2, color: 0xFF0000, alpha: 0.8 });
+    crosshairGfx.circle(0, 0, 25);
+    crosshairGfx.stroke({ width: 2, color: 0xFF0000, alpha: 0.5 });
+    // Radiation trefoil segments
+    for (let i = 0; i < 3; i++) {
+      const a = (i / 3) * Math.PI * 2 - Math.PI / 2;
+      crosshairGfx.moveTo(Math.cos(a) * 10, Math.sin(a) * 10);
+      crosshairGfx.lineTo(Math.cos(a - 0.4) * 25, Math.sin(a - 0.4) * 25);
+      crosshairGfx.lineTo(Math.cos(a + 0.4) * 25, Math.sin(a + 0.4) * 25);
+      crosshairGfx.closePath();
+      crosshairGfx.fill({ color: 0xFFFF00, alpha: 0.3 });
+    }
+  } else if (currentWeapon === 'airstrike') {
+    // Airstrike: smoke signal marker
+    crosshairGfx.circle(0, 0, 5);
+    crosshairGfx.fill({ color: 0xFF4400, alpha: 0.6 });
+    crosshairGfx.circle(0, 0, 20);
+    crosshairGfx.stroke({ width: 1.5, color: 0xFF4400, alpha: 0.4 });
+    // Upward arrow indicating "call from above"
+    crosshairGfx.moveTo(0, -30);
+    crosshairGfx.lineTo(-6, -22);
+    crosshairGfx.stroke({ width: 2, color: 0xFF6600, alpha: 0.5 });
+    crosshairGfx.moveTo(0, -30);
+    crosshairGfx.lineTo(6, -22);
+    crosshairGfx.stroke({ width: 2, color: 0xFF6600, alpha: 0.5 });
+    crosshairGfx.moveTo(0, -30);
+    crosshairGfx.lineTo(0, -18);
+    crosshairGfx.stroke({ width: 2, color: 0xFF6600, alpha: 0.5 });
   } else if (currentWeapon === 'cluster') {
     // Cluster: concentric danger zone rings
     crosshairGfx.circle(0, 0, 4);
@@ -555,7 +666,7 @@ function drawCrosshair() {
 
 // ─── HUD ─────────────────────────────────────────────────────────────────────
 function getHudString() {
-  return `[1] REVOLVER  [2] CHAINGUN  [3] FLAMESHOT  [4] PAINTBALL  [5] MISSILE  [6] LASER  [7] CLUSTER  |  ${WEAPONS[currentWeapon].name}  |  [ESC] Quit`;
+  return `[1] REVOLVER  [2] CHAINGUN  [3] FLAMESHOT  [4] PAINTBALL  [5] MISSILE  [6] LASER  [7] CLUSTER  [8] AIRSTRIKE  [9] NUKE  |  ${WEAPONS[currentWeapon].name}  |  [ESC] Quit`;
 }
 function updateHud() {
   if (hudText) hudText.text = getHudString();
@@ -605,6 +716,38 @@ function fireOneRound(x, y, weapon) {
   const shotColor = isPaintball ? randomBrightColor() : 0;
 
   const isCluster = weapon === WEAPONS.cluster;
+  const isAirstrike = weapon === WEAPONS.airstrike;
+  const isNuke = weapon === WEAPONS.nuke;
+
+  if (isNuke) {
+    if (nukeState) return; // only one nuke at a time
+    nukeState = { x, y, age: 0, phase: 0, spawnTimer: 0 };
+    return;
+  }
+
+  if (isAirstrike) {
+    // Place smoke signal — plane arrives after delay
+    const imp = weapon.impact;
+    // Random flight angle
+    const flyAngle = Math.random() * Math.PI * 2;
+    const startDist = Math.max(screenW, screenH) * 0.8;
+    airstrikes.push({
+      targetX: x, targetY: y,
+      age: 0,
+      smokeTimer: 0,
+      plane: {
+        x: x - Math.cos(flyAngle) * startDist,
+        y: y - Math.sin(flyAngle) * startDist,
+        vx: Math.cos(flyAngle) * imp.planeSpeed,
+        vy: Math.sin(flyAngle) * imp.planeSpeed,
+        active: false, // waits for delay
+      },
+      drops: [],      // pending re-detonation sites [{x, y, timer, count}]
+      dropTimer: 0,
+      dropping: false,
+    });
+    return;
+  }
 
   if (isCluster) {
     // Launch a ballistic cluster bomb toward target
@@ -826,7 +969,17 @@ function stampGlow(x, y, weapon) {
   const r = weapon.glowRadius;
   const I = weapon.glowIntensity;
 
-  if (weapon === WEAPONS.laser) {
+  if (weapon === WEAPONS.airstrike) {
+    // Napalm glow: intense blue
+    stamp.circle(x, y, r * 0.15);
+    stamp.fill({ color: 0xFFFFFF, alpha: I });
+    stamp.circle(x, y, r * 0.35);
+    stamp.fill({ color: 0x88CCFF, alpha: I * 0.7 });
+    stamp.circle(x, y, r * 0.6);
+    stamp.fill({ color: 0x0066FF, alpha: I * 0.5 });
+    stamp.circle(x, y, r);
+    stamp.fill({ color: 0x0022AA, alpha: I * 0.25 });
+  } else if (weapon === WEAPONS.laser) {
     // Laser glow: bright cyan/blue with hot white center
     stamp.circle(x, y, r * 0.15);
     stamp.fill({ color: 0xFFFFFF, alpha: I });
@@ -1303,8 +1456,14 @@ function gameLoop(ticker) {
   glowCoolOverlay.fill({ color: 0x000000, alpha: coolAlpha });
   app.renderer.render({ container: glowCoolOverlay, target: glowTexture, clear: false });
 
+  if (nukeState) {
+    updateNuke(dt);
+    return; // nuke takes over the game loop
+  }
+
   updateMissiles(dt);
   updateCluster(dt);
+  updateAirstrikes(dt);
   updateBulletTrails(dt);
   updateParticles(dt);
   syncParticlesToPixi();
@@ -1627,6 +1786,480 @@ function updateCluster(dt) {
       }
     }
   }
+}
+
+// ─── Nuke Update ─────────────────────────────────────────────────────────────
+function updateNuke(dt) {
+  const n = nukeState;
+  const imp = WEAPONS.nuke.impact;
+  const prevAge = n.age;
+  n.age += dt;
+
+  const t0 = 0;
+  const t1 = imp.flashDuration;                           // end of flash
+  const t2 = t1 + imp.explodeDuration;                    // end of explosion
+  const t3 = t2 + imp.fadeToWhiteDuration;                // fully white
+  const t4 = t3 + imp.holdWhiteDuration;                  // hold white
+  const t5 = t4 + imp.fadeFromWhiteDuration;              // fade done, reset
+
+  // ── Phase 0: Initial flash ──
+  if (n.age < t1) {
+    // First frame: massive screen shake + initial blast
+    if (prevAge === 0) {
+      shakeX = 40;
+      shakeY = 40;
+      shakeDecay = 40;
+    }
+
+    // Continuous screen shake
+    shakeDecay = 40;
+    shakeX += (Math.random() - 0.5) * 30 * dt;
+    shakeY += (Math.random() - 0.5) * 30 * dt;
+
+    // Flash overlay
+    nukeOverlay.visible = true;
+    nukeOverlay.alpha = Math.min(1, n.age / (t1 * 0.3));
+
+    // Massive expanding flash particles — tons of them
+    n.spawnTimer -= dt;
+    if (n.spawnTimer <= 0) {
+      n.spawnTimer = 0.008;
+      // White-hot flash core
+      for (let i = 0; i < 20; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const spd = 300 + Math.random() * 1000;
+        addP('f', n.x + (Math.random() - 0.5) * 50, n.y + (Math.random() - 0.5) * 50,
+          Math.cos(a) * spd, Math.sin(a) * spd,
+          8 + Math.random() * 15, 0xFFFFFF, 1,
+          0.3 + Math.random() * 0.5, 0, 0);
+      }
+      // Sparks blasting in all directions across the screen
+      for (let i = 0; i < 15; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const spd = 500 + Math.random() * 1500;
+        const col = [0xFFFF00, 0xFFAA00, 0xFFFFFF, 0xFFCC00][(Math.random() * 4) | 0];
+        addP('s', n.x, n.y,
+          Math.cos(a) * spd, Math.sin(a) * spd,
+          2 + Math.random() * 3, col, 1,
+          0.3 + Math.random() * 0.5, 0.2, 0);
+      }
+      // Debris launched everywhere
+      for (let i = 0; i < 10; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const spd = 200 + Math.random() * 800;
+        const col = [0xFF6600, 0xFF8800, 0xFFAA00, 0xCCCCCC][(Math.random() * 4) | 0];
+        addP('d', n.x + (Math.random() - 0.5) * 40, n.y + (Math.random() - 0.5) * 40,
+          Math.cos(a) * spd, Math.sin(a) * spd - 200,
+          3 + Math.random() * 6, col, 1,
+          0.8 + Math.random() * 1.5, 0.8, 0);
+      }
+    }
+  }
+
+  // ── Phase 1: Main explosion + mushroom cloud ──
+  else if (n.age < t2) {
+    const explodeProgress = (n.age - t1) / imp.explodeDuration;
+
+    // Shake decays over explosion
+    shakeDecay = 40 * (1 - explodeProgress * 0.7);
+    shakeX += (Math.random() - 0.5) * 15 * (1 - explodeProgress) * dt;
+    shakeY += (Math.random() - 0.5) * 15 * (1 - explodeProgress) * dt;
+
+    // Flash recedes
+    nukeOverlay.alpha = Math.max(0, 1 - explodeProgress * 1.5);
+
+    n.spawnTimer -= dt;
+    if (n.spawnTimer <= 0) {
+      n.spawnTimer = 0.012 + explodeProgress * 0.02;
+
+      const ringRadius = 150 + explodeProgress * 500;
+      const intensity = 1 - explodeProgress * 0.6;
+
+      // Expanding ring of fire — dense
+      for (let i = 0; i < 8; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const rx = n.x + Math.cos(a) * ringRadius * (0.7 + Math.random() * 0.6);
+        const ry = n.y + Math.sin(a) * ringRadius * (0.7 + Math.random() * 0.6);
+        const col = [0xFF6600, 0xFF4400, 0xFFAA00, 0xFFCC00, 0xFFFFFF][(Math.random() * 5) | 0];
+        addP('f', rx, ry,
+          Math.cos(a) * 120, Math.sin(a) * 120,
+          5 + Math.random() * 10, col, 0.8 * intensity,
+          0.2 + Math.random() * 0.4, 0, 0);
+      }
+
+      // Mushroom stem — thick column of smoke
+      for (let i = 0; i < 8; i++) {
+        const stemX = n.x + (Math.random() - 0.5) * 60;
+        const cloudY = n.y - explodeProgress * 250 - Math.random() * 150;
+        const col = [0x444444, 0x555555, 0x333333, 0x666666, 0x553322][(Math.random() * 5) | 0];
+        addP('m', stemX, cloudY,
+          (Math.random() - 0.5) * 80, -100 - Math.random() * 80,
+          12 + Math.random() * 20, col, 0.6 * intensity,
+          1.5 + Math.random() * 2.0, -0.1, 0);
+      }
+
+      // Mushroom cap — wide billowing top
+      if (explodeProgress > 0.1) {
+        for (let i = 0; i < 6; i++) {
+          const capSpread = 100 + explodeProgress * 200;
+          const cx = n.x + (Math.random() - 0.5) * capSpread;
+          const cy = n.y - 120 - explodeProgress * 250 + (Math.random() - 0.5) * 60;
+          addP('m', cx, cy,
+            (Math.random() - 0.5) * 100, -30 - Math.random() * 40,
+            15 + Math.random() * 25, 0x554433, 0.5 * intensity,
+            2.0 + Math.random() * 2.0, -0.05, 0);
+        }
+      }
+
+      // Ground-level fire, debris, shrapnel everywhere
+      for (let i = 0; i < 12; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const dist = Math.random() * ringRadius;
+        const gx = n.x + Math.cos(a) * dist;
+        const gy = n.y + Math.sin(a) * dist;
+        const col = [0xFF6600, 0xFF8800, 0xFFAA00, 0xFF4400, 0xFFCC00][(Math.random() * 5) | 0];
+        addP('d', gx, gy,
+          Math.cos(a) * (150 + Math.random() * 300),
+          -150 - Math.random() * 400,
+          3 + Math.random() * 6, col, 1,
+          0.6 + Math.random() * 1.2, 0.8, 0);
+      }
+
+      // Sparks — tons, flying across the whole screen
+      for (let i = 0; i < 12; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const spd = 400 + Math.random() * 800;
+        const col = [0xFFFF00, 0xFFAA00, 0xFFFFFF, 0xFFCC00, 0xFF8800][(Math.random() * 5) | 0];
+        addP('s', n.x + (Math.random() - 0.5) * ringRadius * 0.5,
+          n.y + (Math.random() - 0.5) * ringRadius * 0.5,
+          Math.cos(a) * spd, Math.sin(a) * spd - 80,
+          2 + Math.random() * 3, col, 1,
+          0.2 + Math.random() * 0.4, 0.3, 0);
+      }
+
+      // Embers raining down all over
+      for (let i = 0; i < 4; i++) {
+        const ex = n.x + (Math.random() - 0.5) * screenW * 0.8;
+        const ey = n.y + (Math.random() - 0.5) * screenH * 0.4 - 100;
+        addP('e', ex, ey,
+          (Math.random() - 0.5) * 60, 30 + Math.random() * 80,
+          1 + Math.random() * 2, 0xFF6600, 0.7,
+          1.5 + Math.random() * 3.0, 0.3, 0);
+      }
+
+      // Shrapnel flying across screen
+      for (let i = 0; i < 3; i++) {
+        const a = -Math.PI * 0.1 - Math.random() * Math.PI * 0.8;
+        const spd = 400 + Math.random() * 600;
+        addP('x', n.x + (Math.random() - 0.5) * 60, n.y,
+          Math.cos(a) * spd, Math.sin(a) * spd - 300,
+          2 + Math.random() * 3, 0xCCCCCC, 1,
+          2.0 + Math.random() * 2.0, 1, 0);
+      }
+
+      // Stamp glow across blast zone
+      if (Math.random() < 0.5) {
+        const a = Math.random() * Math.PI * 2;
+        const dist = Math.random() * ringRadius * 0.7;
+        const gx = n.x + Math.cos(a) * dist;
+        const gy = n.y + Math.sin(a) * dist;
+        const gs = new PIXI.Graphics();
+        gs.circle(gx, gy, 20 + Math.random() * 35);
+        gs.fill({ color: 0xFF4400, alpha: 0.25 * intensity });
+        gs.circle(gx, gy, 10 + Math.random() * 15);
+        gs.fill({ color: 0xFFAA00, alpha: 0.35 * intensity });
+        app.renderer.render({ container: gs, target: glowTexture, clear: false });
+        gs.destroy();
+      }
+    }
+  }
+
+  // ── Phase 2: Fade to white ──
+  else if (n.age < t3) {
+    const fadeProgress = (n.age - t2) / imp.fadeToWhiteDuration;
+    nukeOverlay.visible = true;
+    nukeOverlay.alpha = fadeProgress;
+    // Gentle residual shake
+    shakeDecay = 5 * (1 - fadeProgress);
+  }
+
+  // ── Phase 3: Hold white ──
+  else if (n.age < t4) {
+    nukeOverlay.alpha = 1;
+    shakeDecay = 0;
+    // Clear everything halfway through the hold
+    if (prevAge < (t3 + t4) / 2 && n.age >= (t3 + t4) / 2) {
+      resetGame();
+    }
+  }
+
+  // ── Phase 4: Fade from white ──
+  else if (n.age < t5) {
+    const fadeProgress = (n.age - t4) / imp.fadeFromWhiteDuration;
+    nukeOverlay.alpha = 1 - fadeProgress;
+  }
+
+  // ── Done ──
+  else {
+    nukeOverlay.alpha = 0;
+    nukeOverlay.visible = false;
+    nukeState = null;
+  }
+
+  // Still update particles and render during nuke
+  updateMissiles(dt);
+  updateCluster(dt);
+  updateAirstrikes(dt);
+  updateBulletTrails(dt);
+  updateParticles(dt);
+  syncParticlesToPixi();
+
+  // Crosshair + muzzle flash
+  crosshairGfx.x = mouseX;
+  crosshairGfx.y = mouseY;
+  if (muzzleFlashTimer > 0) {
+    muzzleFlashTimer -= dt * 1000;
+    if (muzzleFlashTimer <= 0) muzzleFlashGfx.visible = false;
+  }
+
+  particleCountText.text = `Particles: ${pCount}`;
+}
+
+function resetGame() {
+  // Clear all particles
+  pCount = 0;
+
+  // Clear all projectiles
+  missiles.length = 0;
+  clusterBombs.length = 0;
+  bomblets.length = 0;
+  airstrikes.length = 0;
+  bulletTrails.length = 0;
+
+  // Clear decal layer (scorch marks, craters, paint, ash)
+  const clearGfx = new PIXI.Graphics();
+  clearGfx.rect(0, 0, screenW, screenH);
+  clearGfx.fill({ color: 0x000000, alpha: 0 });
+  app.renderer.render({ container: clearGfx, target: decalTexture, clear: true });
+  app.renderer.render({ container: clearGfx, target: glowTexture, clear: true });
+  clearGfx.destroy();
+
+  // Clear graphics
+  bulletTrailGfx.clear();
+  missileGfx.clear();
+  muzzleFlashGfx.clear();
+  muzzleFlashGfx.visible = false;
+  muzzleFlashTimer = 0;
+
+  // Reset shake
+  shakeX = 0;
+  shakeY = 0;
+  shakeDecay = 0;
+  gameContainer.x = 0;
+  gameContainer.y = 0;
+
+  // Hide excess pixi particles
+  for (let i = 0; i < pixiParticles.length; i++) {
+    pixiParticles[i].alpha = 0;
+    pixiParticles[i].x = -100;
+    pixiParticles[i].y = -100;
+  }
+}
+
+// ─── Airstrike Update ────────────────────────────────────────────────────────
+function updateAirstrikes(dt) {
+  const weapon = WEAPONS.airstrike;
+  const imp = weapon.impact;
+
+  let i = airstrikes.length;
+  while (i--) {
+    const a = airstrikes[i];
+    a.age += dt;
+
+    // ── Smoke signal phase ──
+    if (a.age < imp.planeDelay) {
+      a.smokeTimer -= dt;
+      if (a.smokeTimer <= 0) {
+        a.smokeTimer = 0.04 + Math.random() * 0.04;
+        // Rising colored smoke signal
+        const col = [0xFF4400, 0xFF6600, 0xCC3300, 0xFF8800][(Math.random() * 4) | 0];
+        addP('m', a.targetX + (Math.random() - 0.5) * 10, a.targetY,
+          (Math.random() - 0.5) * 15, -60 - Math.random() * 50,
+          5 + Math.random() * 8, col, 0.5 + Math.random() * 0.3,
+          0.8 + Math.random() * 0.6, -0.15, 0);
+      }
+      continue;
+    }
+
+    // ── Activate plane ──
+    if (!a.plane.active) {
+      a.plane.active = true;
+      a.dropTimer = 0;
+    }
+
+    // ── Fly the plane ──
+    const p = a.plane;
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+
+    // Distance from plane to target (along flight path)
+    const dxT = p.x - a.targetX;
+    const dyT = p.y - a.targetY;
+    const distToTarget = Math.sqrt(dxT * dxT + dyT * dyT);
+
+    // Drop bombs when within drop zone
+    if (distToTarget < imp.dropZone) {
+      if (!a.dropping) a.dropping = true;
+      a.dropTimer -= dt;
+      if (a.dropTimer <= 0) {
+        a.dropTimer = imp.dropInterval * (0.6 + Math.random() * 0.8);
+
+        // Bomb impact position — offset from plane with spread
+        const bx = p.x + (Math.random() - 0.5) * imp.dropSpread;
+        const by = p.y + (Math.random() - 0.5) * imp.dropSpread;
+
+        // Immediate flashy explosion
+        airstrikeExplosion(bx, by);
+
+        // Schedule re-strikes at this location
+        const restrikes = imp.restrikeCount > 0 ? 1 + Math.floor(Math.random() * imp.restrikeCount) : 0;
+        if (restrikes > 0) {
+          a.drops.push({
+            x: bx, y: by,
+            timer: imp.restrikeInterval * (0.5 + Math.random() * 0.5),
+            count: restrikes,
+          });
+        }
+      }
+    }
+
+    // ── Update pending re-detonations ──
+    let d = a.drops.length;
+    while (d--) {
+      const drop = a.drops[d];
+      drop.timer -= dt;
+      if (drop.timer <= 0) {
+        drop.timer = imp.restrikeInterval * (0.5 + Math.random() * 1.0);
+        drop.count--;
+
+        // Re-detonate with slight random offset
+        const rx = drop.x + (Math.random() - 0.5) * 20;
+        const ry = drop.y + (Math.random() - 0.5) * 20;
+        airstrikeExplosion(rx, ry);
+
+        if (drop.count <= 0) {
+          a.drops.splice(d, 1);
+        }
+      }
+    }
+
+    // ── Draw the plane ──
+    const flyAngle = Math.atan2(p.vy, p.vx);
+    const cos = Math.cos(flyAngle);
+    const sin = Math.sin(flyAngle);
+
+    // Fuselage
+    missileGfx.moveTo(p.x + cos * 18, p.y + sin * 18);
+    missileGfx.lineTo(p.x - cos * 18 - sin * 5, p.y - sin * 18 + cos * 5);
+    missileGfx.lineTo(p.x - cos * 18 + sin * 5, p.y - sin * 18 - cos * 5);
+    missileGfx.closePath();
+    missileGfx.fill({ color: 0x888888, alpha: 0.8 });
+    // Wings
+    missileGfx.moveTo(p.x - cos * 4 - sin * 20, p.y - sin * 4 + cos * 20);
+    missileGfx.lineTo(p.x - cos * 4 + sin * 20, p.y - sin * 4 - cos * 20);
+    missileGfx.lineTo(p.x - cos * 10, p.y - sin * 10);
+    missileGfx.closePath();
+    missileGfx.fill({ color: 0x777777, alpha: 0.7 });
+    // Tail
+    missileGfx.moveTo(p.x - cos * 16 - sin * 10, p.y - sin * 16 + cos * 10);
+    missileGfx.lineTo(p.x - cos * 16 + sin * 10, p.y - sin * 16 - cos * 10);
+    missileGfx.lineTo(p.x - cos * 18, p.y - sin * 18);
+    missileGfx.closePath();
+    missileGfx.fill({ color: 0x666666, alpha: 0.6 });
+
+    // Engine exhaust
+    if (Math.random() < dt * 20) {
+      addP('m', p.x - cos * 18, p.y - sin * 18,
+        -p.vx * 0.3 + (Math.random() - 0.5) * 20,
+        -p.vy * 0.3 + (Math.random() - 0.5) * 20,
+        3 + Math.random() * 4, 0x999999, 0.3,
+        0.3 + Math.random() * 0.3, -0.1, 0);
+    }
+
+    // ── Remove when plane is far off screen and all drops resolved ──
+    const offScreen = p.x < -200 || p.x > screenW + 200 || p.y < -200 || p.y > screenH + 200;
+    if (offScreen && a.dropping && a.drops.length === 0) {
+      airstrikes.splice(i, 1);
+    }
+  }
+}
+
+function airstrikeExplosion(x, y) {
+  const weapon = WEAPONS.airstrike;
+
+  // Screen shake
+  const sa = Math.random() * Math.PI * 2;
+  shakeX += Math.cos(sa) * 10;
+  shakeY += Math.sin(sa) * 10;
+  shakeDecay = Math.max(shakeDecay, 10);
+
+  // Bright blue-white flash core
+  for (let i = 0; i < 10; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const spd = 60 + Math.random() * 180;
+    const col = [0xFFFFFF, 0x88CCFF, 0x00AAFF, 0x00DDFF][(Math.random() * 4) | 0];
+    addP('f', x, y,
+      Math.cos(a) * spd, Math.sin(a) * spd,
+      4 + Math.random() * 6, col, 1,
+      0.05 + Math.random() * 0.08, 0, 0);
+  }
+
+  // Blue sparks shower
+  for (let i = 0; i < 20; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const spd = 150 + Math.random() * 500;
+    const col = [0x00CCFF, 0x00EEFF, 0xFFFFFF, 0x44AAFF, 0x0088FF][(Math.random() * 5) | 0];
+    addP('s', x, y,
+      Math.cos(a) * spd, Math.sin(a) * spd - 50 - Math.random() * 100,
+      1.5 + Math.random() * 2.5, col, 1,
+      0.15 + Math.random() * 0.3, 0.4, 0);
+  }
+
+  // Napalm flames — lasting blue-white fires
+  const fireCount = 2 + Math.floor(Math.random() * 2);
+  for (let i = 0; i < fireCount; i++) {
+    const fx = x + (Math.random() - 0.5) * 30;
+    const fy = y + (Math.random() - 0.5) * 30;
+    addP('F', fx, fy, 0, 0,
+      6 + Math.random() * 5,
+      0x0088FF, 1,
+      1.5 + Math.random() * 2.0, // burn 1.5-3.5s
+      0, 0.3 * Math.random(), 0);
+  }
+
+  // Burning debris flung outward
+  for (let i = 0; i < 8; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const spd = 100 + Math.random() * 300;
+    const col = [0x0066FF, 0x0088FF, 0x00AAFF, 0xFFAA00, 0xFF6600][(Math.random() * 5) | 0];
+    addP('d', x, y,
+      Math.cos(a) * spd, Math.sin(a) * spd - 80 - Math.random() * 120,
+      2 + Math.random() * 4, col, 1,
+      0.5 + Math.random() * 0.8, 0.8, 0);
+  }
+
+  // Dark smoke
+  for (let i = 0; i < 5; i++) {
+    const a = Math.random() * Math.PI * 2;
+    addP('m', x + (Math.random() - 0.5) * 10, y + (Math.random() - 0.5) * 10,
+      Math.cos(a) * 30 + (Math.random() - 0.5) * 20, -40 - Math.random() * 50,
+      6 + Math.random() * 10, 0x222233, 0.5,
+      0.5 + Math.random() * 0.6, -0.2, 0);
+  }
+
+  // Scorch mark + blue glow stamp
+  stampImpact(x, y, weapon, 0);
+  stampGlow(x, y, weapon);
 }
 
 // ─── Bullet Trail Update ─────────────────────────────────────────────────────

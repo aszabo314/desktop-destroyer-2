@@ -5,13 +5,23 @@
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder --win portable"
+    "build": "electron-builder --win portable",
+    "build:win": "electron-builder --win portable",
+    "build:mac": "electron-builder --mac dmg",
+    "build:linux": "electron-builder --linux AppImage",
+    "build:all": "electron-builder --win portable --mac dmg --linux AppImage"
   },
   "build": {
     "appId": "com.desktop-destroyer",
     "productName": "Desktop Destroyer",
     "win": {
       "target": "portable"
+    },
+    "mac": {
+      "target": "dmg"
+    },
+    "linux": {
+      "target": "AppImage"
     },
     "files": [
       "src/**/*",
@@ -22,11 +32,11 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "electron": "^41.2.0",
     "howler": "^2.2.4",
     "pixi.js": "^8.18.1"
   },
   "devDependencies": {
+    "electron": "^41.2.0",
     "electron-builder": "^26.8.1"
   }
 }
